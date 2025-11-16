@@ -537,9 +537,6 @@ for tid, track_info in frame_tracks.items():
 ---
 
 ## 6. Visual Aids: Diagrams, Tables, and APIs
-
-This section collects visual aids and tabular summaries for quick reference.
-
 ### 6.1 Per-Frame Processing Sequence (Component Interaction)
 ```mermaid
 sequenceDiagram
@@ -658,3 +655,187 @@ sequenceDiagram
 | `IO_Manager`               | `read_frame(name)`               | Load a single frame as image tensor                              | Returns image data                                        |
 | `IO_Manager`               | `save_video(...)`                | Finalize and write output video file                             | Writes `.mp4`                                             |
 
+## 7. Code Organization & Build / Run Setup
+
+### 7.1 Repository Layout
+
+At a high level, the PHALP repo is organized into:
+
+- `phalp/`
+  - `PHALP.py` – main orchestrator class.
+  - `hmar.py` – Human Mesh & Appearance Regression model.
+  - `pose_transformer_v2.py` – temporal pose prediction model.
+  - `tracker.py` – multi-object tracking logic and data association.
+  - `track.py` – `Track` class and tracklet data structure.
+  - `detection.py` – `Detection` wrapper for per-person features.
+  - `visualizer.py` – visualization and video rendering.
+  - `utils_*` – utility modules (Detectron2 wrapper, dataset helpers, IO, etc.).
+  - `configs/` – Hydra configuration files for experiments and demos.
+
+- `scripts/`
+  - `demo.py` – main entry point script used for running PHALP on a video.
+
+- `models/` or `checkpoints/` (varies by setup)
+  - Pretrained HMAR / backbone weights, downloaded or cached at runtime.
+
+### 7.2 Dependencies and Build Notes
+
+At a minimum, PHALP relies on:
+
+- PyTorch + CUDA (for HMAR, pose transformer, and possibly rendering).
+- Detectron2 (for 2D person detection and masks).
+- SMPL / SMPL-X body model code and data files.
+- Hydra (for configuration management).
+- Joblib (for saving `.pkl` results).
+
+Typically you will:
+
+1. Create a Python environment (conda/venv).
+2. Install PyTorch with CUDA.
+3. Install Detectron2 compatible with that PyTorch build.
+4. Install remaining Python dependencies from `requirements.txt` or `setup.py`.
+
+### 7.3 Running PHALP on a Video
+
+A typical command (exact syntax may vary slightly with config files) looks like:
+
+```bash
+python scripts/demo.py \
+  video.source=/path/to/input_video.mp4 \
+  video.output_dir=outputs/demo_run
+```
+This will:
+1. Load all models (detector, HMAR, pose transformer, tracker, visualizer).
+2. Process each frame of the video through the PHALP pipeline.
+3. Save:
+    - A rendered video (output_video.mp4).
+    - A results file (results.pkl) containing final_visuals_dic with all tracklets.
+
+## 8. Key Abstractions & Extension Points
+
+### 8.1 Conceptual Interfaces
+
+Even though PHALP is implemented as plain Python classes, a few **implicit interfaces** show up:
+
+- **Detector interface**
+  - Expected to provide: `pred_bbox`, `pred_masks`, `pred_scores`, `pred_classes` given an image.
+  - Used by: `PHALP.get_detections(...)`.
+  - Extension point: plug in a different detector (e.g., YOLO, another Mask R-CNN) as long as you return the same tensors.
+
+- **HMAR / Feature Extractor**
+  - Given a cropped person image, provides:
+    - SMPL params, 2D/3D joints, camera parameters.
+    - Appearance embedding (`appe`), pose embedding (`pose`), location embedding (`loca`), and optional `uv`.
+  - Used by: `PHALP.get_human_features(...)`.
+  - Extension point: replace HMAR with a different 3D human model, as long as you expose the same fields in `detection_data`.
+
+- **Detection Object**
+  - `Detection` wraps a `detection_data` dict and bbox geometry.
+  - Tracker assumes it can read:
+    - `appe`, `pose`, `loca`, `uv`, `bbox`, `conf`, `time`, etc.
+  - Extension point: add new feature types (e.g. “gaze” or “action logits”) by inserting extra keys into `detection_data`.
+
+- **Tracker API**
+  - Exposed methods:
+    - `predict()` – advance all tracks.
+    - `update(detections, ...)` – incorporate new detections and manage tracks.
+    - `accumulate_vectors(...)` – prepare sequences for temporal prediction.
+  - `PHALP.track()` only relies on this public API, so in principle you could swap in a different tracking algorithm that implements the same methods.
+
+- **Temporal Model (Pose Predictor)**
+  - `pose_transformer_v2.Pose_transformer_v2` mainly exposes:
+    - `predict_next(pose_seq, meta_seq, time_seq, ...) -> pose+camera`
+  - Extension point: replace this with another temporal model (RNN, GRU, diffusion-based predictor) as long as you keep the input/output shapes compatible.
+
+- **Visualizer**
+  - Given:
+    - Raw frame.
+    - Tracklet outputs (`smpl`, `camera`, joints, IDs, etc.).
+  - Returns:
+    - A rendered RGB frame.
+  - Extension point: customize visualization (e.g., skeleton-only, action labels, heatmaps).
+
+### 8.2 How to Add a New Detector (Example Extension)
+
+To plug in a new detector:
+
+1. Implement a wrapper class, e.g. `MyDetector`, with a `__call__(image)` method that returns:
+   - `pred_bbox`, `pred_masks`, `pred_scores`, `pred_classes` in the same shapes expected by PHALP.
+2. In `PHALP.__init__`, instead of using the Detectron2 wrapper, instantiate `MyDetector` and assign it to `self.detector`.
+3. Verify that `PHALP.get_detections(...)` works without modification.
+
+Because the rest of the code only sees the standardized outputs, no changes are required in HMAR or the tracker.
+
+### 8.3 How to Add a New Temporal Model
+
+To experiment with a different temporal model:
+
+1. Implement a class with a `predict_next(pose_seq, meta_seq, time_seq, time)` method that:
+   - Accepts the same tensor shapes as `Pose_transformer_v2`.
+   - Returns a 229-dimensional vector (or a compatible structure that can be converted to SMPL+camera).
+2. Update `PHALP.__init__` to instantiate your new model as `self.pose_predictor`.
+3. Reuse `Tracker.accumulate_vectors(...)` and `PHALP.forward_for_tracking(...)` without changes, as long as your new model respects the same input contract.
+
+### 8.4 Critical Paths and Performance-Sensitive Pieces
+
+From the code and architecture:
+
+- **Most expensive components**:
+  - Detector (per-frame CNN).
+  - HMAR (per-person deep network, often the heaviest).
+  - Pose transformer (per-track temporal model, usually lighter than HMAR).
+- **Mostly CPU-bound**:
+  - Tracking / matching (`tracker.py`, `nn_matching.py`).
+  - IO and video encoding.
+
+Understanding these critical paths is essential if you want to:
+
+- Profile bottlenecks.
+- Batch more operations (e.g., batch HMAR over all persons in a frame).
+- Move more work to the GPU or parallelize across cores.
+
+## 9. AI-Assisted Exploration & Prompts Used
+
+As part of this project, I used an in-editor AI assistant to help **navigate and summarize** the PHALP codebase. Instead of reading every file linearly, I treated the agent like a “pair programming tutor” whose main job was to explain relationships between modules and generate diagrams/tables.
+
+### 9.1 How I Used the AI Assistant
+
+I mainly used the assistant for:
+
+- **Architecture discovery**
+  - Asking for high-level overviews of how `PHALP`, `hmar`, `tracker`, and `pose_transformer_v2` interact.
+- **Data flow tracing**
+  - Having it trace a single frame through `PHALP.track()`, into `get_detections`, `get_human_features`, and the tracker.
+- **Structure extraction**
+  - Generating the ASCII diagrams and tables that appear in this document (component diagram, per-frame flow chart, feature vs producer table, API summary).
+- **Clarifying temporal logic**
+  - Asking it to locate where the temporal model sequence is constructed and how the 229-dim pose vector is formed.
+
+### 9.2 Example Deep-Dive Prompts I Used (or Could Use)
+
+These are representative prompts I used or refined during exploration:
+
+- *“In `PHALP.py`, what is the exact sequence of steps from a raw frame to updated tracklets? List the functions called and the data they pass.”*
+- *“Explain what `HMAR.forward()` returns and how those outputs are turned into `Detection` objects. Include SMPL, joints, camera, and embeddings.”*
+- *“Show me how `Tracker.update()` constructs the cost matrix. Where do appearance, pose, location, and UV distances come from?”*
+- *“Walk through the temporal model `pose_transformer_v2`: how is the input sequence constructed from `Track.track_data['history']`, and what does the 229-dimensional output represent?”*
+- *“Summarize how tracklets are stored internally inside `Track` and how history and predictions are used.”*
+
+## 10. Reflection & Insights
+
+Working through PHALP with an AI-assisted workflow gave me a few key insights:
+
+1. **Complex systems are often built from simple, well-defined interfaces.**  
+   Even though PHALP has a lot of moving parts, the interfaces between them are straightforward: images in, detections out; crops in, 3D features out; `Detection` objects in, tracklets out. Once I understood these contracts, the rest of the code became much easier to follow.
+
+2. **3D tracking is really about feature design.**  
+   PHALP’s performance depends heavily on the quality of the features coming out of HMAR—appearance embeddings, pose embeddings, location features, and UV-based encodings. The tracker itself is conceptually simple (cost matrices + Hungarian matching); the clever part is how those features are constructed.
+
+3. **Temporal modeling can be modularized cleanly.**  
+   The pose transformer consumes sequences from `Tracker.accumulate_vectors` and returns future pose+camera parameters. Because this is isolated behind a `predict_next(...)` interface, it would be relatively easy to experiment with alternative temporal models.
+
+4. **AI-generated documentation is a starting point, not an endpoint.**  
+   The diagrams and tables in this document came from iterating with an AI assistant, but I still had to:
+   - Verify them against the actual code.
+   - Fill gaps where the explanation was superficial.
+   - Decide what level of detail would be most helpful for me (and for a future reader or viewer of the walkthrough).
