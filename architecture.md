@@ -43,47 +43,45 @@ At a high level, PHALP is a pipeline that looks like this:
 ### 2.1 System Components Overview
 
 ```mermaid
-flowchart TD
-    IO[IO_Manager\n(io.py / utils)] --> PHALP[PHALP class\n(PHALP.py)]
+graph TD
+  IO["IO_Manager (io.py / utils)"] --> PH["PHALP class (PHALP.py)"]
 
-    PHALP --> DET[Detector\n(Detectron2 wrappers)]
-    PHALP --> HMAR[HMAR\n(hmar.py + heads/*)]
-    PHALP --> PT[Pose Transformer\n(pose_transformer_v2.py)]
-    PHALP --> VIS[Visualizer\n(visualizer.py / py_renderer.py)]
+  PH --> DET["Detector (Detectron2 wrappers)"]
+  PH --> HM["HMAR (hmar.py + heads/*)"]
+  PH --> PT["Pose Transformer (pose_transformer_v2.py)"]
+  PH --> VIS["Visualizer (visualizer.py / py_renderer.py)"]
 
-    DET -->|bbox, mask| TRK[Tracker\n(tracker.py, track.py,\ndetection.py, nn_matching.py)]
-    HMAR -->|SMPL, joints,\nappe, pose, uv| TRK
+  DET --> TRK["Tracker (tracker.py, track.py, detection.py, nn_matching.py)"]
+  HM --> TRK
 
-    TRK -->|history & metadata| PT
-    PT -->|predicted pose & camera| TRK
+  TRK --> PT
+  PT --> TRK
 
-    TRK -->|IDs, history,\npredictions| OUT[Outputs & Storage\n(rendered video,\ntracklets .pkl)]
-    VIS -->|rendered frames| OUT
+  TRK --> OUT["Outputs & Storage (rendered video, tracklets .pkl)"]
+  VIS --> OUT
 ```
 
 ### 2.2 Per-Video Flow
 ```mermaid
-flowchart TD
-    START([START\n(run demo / script)]) --> LOAD[Load config & models\n(PHALP, Detector,\nHMAR, Pose Transformer,\nTracker, Visualizer)]
+graph TD
+  START(["START (run demo / script)"]) --> LOAD["Load config & models (PHALP, Detector, HMAR, Pose Transformer, Tracker, Visualizer)"]
 
-    LOAD --> OPEN[Open video or\nframe source]
+  LOAD --> OPEN["Open video / frame source"]
+  OPEN --> READ["Read frame (IO_Manager)"]
+  READ --> DETECT["Run detector (bboxes, masks, scores, classes)"]
+  DETECT --> CROP["Crop & preprocess person regions"]
+  CROP --> HMSTEP["HMAR inference (SMPL, joints, cam, pose emb, UV, appe emb)"]
+  HMSTEP --> BUILDDET["Build Detection objects"]
+  BUILDDET --> PRED["Tracker.predict() (propagate tracks)"]
+  PRED --> UPDATE["Tracker.update() (matching, create/delete tracks)"]
+  UPDATE --> TEMP["Temporal prediction (Pose Transformer)"]
+  TEMP --> SNAP["Update final_visuals_dic[frame]"]
+  SNAP --> VIS["Visualize (render meshes, boxes, IDs, append to video)"]
 
-    OPEN --> READ[Read frame\n(IO_Manager)]
-    READ --> DETECT[Run detector\n(bboxes, masks,\nscores, classes)]
-    DETECT --> CROP[Crop & preprocess\nperson regions]
-    CROP --> HMARSTEP[HMAR inference\n(SMPL, joints,\ncam, pose emb,\nUV, appe emb)]
-    HMARSTEP --> BUILDDET[Build Detection\nobjects]
-    BUILDDET --> PREDICT[Tracker.predict()\n(propagate tracks)]
-    PREDICT --> UPDATE[Tracker.update()\n(cost matrix,\nHungarian matching,\ncreate/delete tracks)]
-    UPDATE --> TEMP[Temporal prediction\n(Pose Transformer)]
-    TEMP --> SNAP[Update\nfinal_visuals_dic[frame]]
-    SNAP --> VIS[Visualize (optional)\n(render meshes,\nboxes, IDs,\nappend to video)]
-
-    VIS --> MORE{More frames?}
-    MORE -->|Yes| READ
-    MORE -->|No| ENDVID[End of video\n(save .pkl,\nclose writer)]
-
-    ENDVID --> END([END])
+  VIS --> MORE{"More frames?"}
+  MORE -->|Yes| READ
+  MORE -->|No| ENDVID["End of video (save .pkl, close writer)"]
+  ENDVID --> END(["END"])
 ```
 
 ## 3. Core Components: Deep Dives into Major Subsystems
