@@ -541,75 +541,58 @@ for tid, track_info in frame_tracks.items():
 This section collects visual aids and tabular summaries for quick reference.
 
 ### 6.1 Per-Frame Processing Sequence (Component Interaction)
-```text
-Participants:
-- demo.py (script)
-- PHALP (orchestrator)
-- IO_Manager
-- Detector
-- HMAR
-- Tracker
-- PoseTransformer
-- Visualizer
+```mermaid
+sequenceDiagram
+    participant Demo as demo.py (script)
+    participant PHALP as PHALP (orchestrator)
+    participant IO as IO_Manager
+    participant Det as Detector
+    participant HMAR as HMAR
+    participant Trk as Tracker
+    participant PoseT as PoseTransformer
+    participant Vis as Visualizer
 
-Sequence (for one frame):
+    Demo ->> PHALP: start()
+    PHALP ->> IO: open_source()
+    IO -->> PHALP: frames / init info
 
-demo.py           PHALP           IO_Manager      Detector        HMAR        Tracker   PoseTransf.   Visualizer
-   |                |                 |              |             |             |          |             |
-   |  start()       |                 |              |             |             |          |             |
-   |--------------->|                 |              |             |             |          |             |
-   |                | open_source()   |              |             |             |          |             |
-   |                |---------------> |              |             |             |          |             |
-   |                |   frames/init   |              |             |             |          |             |
-   |                |<--------------- |              |             |             |          |             |
-(loop over frames)
-   |                | read_frame()    |              |             |             |          |             |
-   |                |---------------> |              |             |             |          |             |
-   |                |   frame RGB     |              |             |             |          |             |
-   |                |<--------------- |              |             |             |          |             |
-   |                | get_detections(frame)          |             |             |          |             |
-   |                |------------------------------->|             |             |          |             |
-   |                |      bboxes, masks, scores     |             |             |          |             |
-   |                |<------------------------------ |             |             |          |             |
-   |                | crop + preprocess detections                  |            |          |             |
-   |                |---------------------------------------------->|            |          |             |
-   |                |   person crops (tensors)                      |            |          |             |
-   |                |<----------------------------------------------|            |          |             |
-   |                | HMAR.forward(crops)                                        |          |             |
-   |                |----------------------------------------------->            |          |             |
-   |                | smpl, joints3d, cam, appe_emb, pose_emb, uv                |          |             |
-   |                |<-----------------------------------------------            |          |             |
-   |                | build Detection objects                                    |          |             |
-   |                | Tracker.predict()                                          |          |             |
-   |                |-----------------------------------------------> Tracker    |          |             |
-   |                |  (propagate existing tracks)                               |          |             |
-   |                |<-----------------------------------------------            |          |             |
-   |                | Tracker.update(detections)                                 |          |             |
-   |                |-----------------------------------------------> Tracker    |          |             |
-   |                |  (cost matrix + assignment)                                |          |             |
-   |                |<-----------------------------------------------            |          |             |
-   |                | accumulate_vectors()                                       |          |             |
-   |                |-----------------------------------------------> Tracker    |          |             |
-   |                | sequences per track                                        |          |             |
-   |                |<-----------------------------------------------            |          |             |
-   |                | forward_for_tracking(seq, attribute="P")                   |          |             |
-   |                |-----------------------------------------------> PoseTransf.|          |             |
-   |                |      predicted pose+cam                                    |          |             |
-   |                |<-----------------------------------------------            |          |             |
-   |                | Track.add_predicted(...)                                   |          |             |
-   |                | (update track prediction deques)                           |          |             |
-   |                | final_visuals_dic[frame_name] updated                      |          |             |
-   |                | Visualizer.render_step(frame, final_visuals_dic[frame])               |             |
-   |                |-----------------------------------------------> Visualizer            |             |
-   |                | rendered_frame                                                        |             |
-   |                |<-----------------------------------------------                       |             |
-   |                | write rendered_frame --------------------------> IO_Manager           |
-   |                |---------------------------------------------------------------> |
-(end loop)
-   |                | save tracklets .pkl (joblib)                                  |
-   |                | save output video                                             |
-   |                |                 done                                          |
-   |<---------------|                                                              |
+    loop For each frame
+        PHALP ->> IO: read_frame()
+        IO -->> PHALP: frame RGB
+
+        PHALP ->> Det: get_detections(frame)
+        Det -->> PHALP: bboxes, masks, scores
+
+        PHALP ->> HMAR: crop + preprocess detections\nHMAR.forward(crops)
+        HMAR -->> PHALP: smpl, joints3d, cam,\nappe_emb, pose_emb, uv
+
+        PHALP ->> PHALP: build Detection objects
+
+        PHALP ->> Trk: Tracker.predict()\n(propagate existing tracks)
+        Trk -->> PHALP: updated track states
+
+        PHALP ->> Trk: Tracker.update(detections)\n(cost matrix + assignment)
+        Trk -->> PHALP: matched / new / removed tracks
+
+        PHALP ->> Trk: accumulate_vectors()
+        Trk -->> PHALP: sequences per track
+
+        PHALP ->> PoseT: forward_for_tracking(seq,\nattribute = "P")
+        PoseT -->> PHALP: predicted pose + cam
+
+        PHALP ->> Trk: Track.add_predicted(...)\n(update prediction deques)
+
+        PHALP ->> PHALP: update final_visuals_dic[frame_name]
+
+        PHALP ->> Vis: render_step(frame,\nfinal_visuals_dic[frame])
+        Vis -->> PHALP: rendered_frame
+
+        PHALP ->> IO: write rendered_frame\n(to output video)
+    end
+
+    PHALP ->> PHALP: save tracklets .pkl (joblib)
+    PHALP ->> IO: save output video
+    PHALP -->> Demo: done
 ```
 
 ### 6.2 Component Summary Table
