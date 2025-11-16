@@ -42,163 +42,53 @@ At a high level, PHALP is a pipeline that looks like this:
 
 ### 2.1 System Components Overview
 
-```text
-                         +----------------------+
-                         |     IO_Manager       |
-                         |   (io.py / utils)    |
-                         +----------+-----------+
-                                    |
-                                    v
-                         +----------------------+
-                         |      PHALP class     |
-                         |      (PHALP.py)      |
-                         +----------+-----------+
-                                    |
-        -----------------------------------------------------------------
-        |                 |                     |                       |
-        v                 v                     v                       v
-+---------------+  +---------------+    +----------------+      +----------------+
-|   Detector    |  |     HMAR      |    | Pose Transformer|     |   Visualizer   |
-| (Detectron2   |  |  (hmar.py +   |    | (pose_transf.*) |     | (visualizer.py |
-|  wrappers)    |  |   heads/*)    |    +----------------+      |  py_renderer)  |
-+-------+-------+  +-------+-------+             ^              +--------+-------+
-        |                  |                     |                       |
-        |   detections     | HMAR features       | predicted pose        |
-        |  (bbox/mask)     | (SMPL, joints,      | /camera for tracks    |
-        |                  |  appe/pose/uv)      |                       |
-        v                  v                     |                       v
-        -----------------------------------------------------------------
-                                    |
-                                    v
-                           +------------------+
-                           |     Tracker      |
-                           | (tracker.py,     |
-                           |  track.py,       |
-                           |  detection.py,   |
-                           |  nn_matching.py) |
-                           +---------+--------+
-                                     |
-                    updated tracklets| (IDs, history, predictions)
-                                     v
-                         +----------------------+
-                         |  Outputs & Storage   |
-                         |  - rendered video    |
-                         |  - tracklets .pkl    |
-                         +----------------------+
+```mermaid
+flowchart TD
+    IO[IO_Manager<br/>(io.py / utils)] --> PHALP[PHALP class<br/>(PHALP.py)]
+
+    PHALP --> DET[Detector<br/>(Detectron2 wrappers)]
+    PHALP --> HMAR[HMAR<br/>(hmar.py + heads/*)]
+    PHALP --> PT[Pose Transformer<br/>(pose_transf.*)]
+    PHALP --> VIS[Visualizer<br/>(visualizer.py / py_renderer)]
+
+    DET -->|detections<br/>(bbox / mask)| TRK[Tracker<br/>(tracker.py, track.py,<br/>detection.py, nn_matching.py)]
+    HMAR -->|HMAR features<br/>(SMPL, joints,<br/>appe / pose / uv)| TRK
+
+    TRK -->|history & metadata| PT
+    PT -->|predicted pose / camera<br/>for tracks| TRK
+
+    TRK -->|updated tracklets<br/>(IDs, history, predictions)| OUT[Outputs & Storage<br/>- rendered video<br/>- tracklets .pkl]
+
+    VIS -->|rendered frames| OUT
 ```
 
 ### 2.2 Per-Video Flow
-```text
-                +----------------------+
-                |        START         |
-                |  (run demo / script) |
-                +----------+-----------+
-                           |
-                           v
-                +----------------------+
-                |  Load config & models|
-                |  - PHALP class       |
-                |  - Detector          |
-                |  - HMAR              |
-                |  - Pose Transformer  |
-                |  - Tracker           |
-                |  - Visualizer        |
-                +----------+-----------+
-                           |
-                           v
-                +----------------------+
-                |   Open video /       |
-                |   frame source       |
-                +----------+-----------+
-                           |
-                           v
-               /------------------------\
-              /  For each frame in video \
-              \--------------------------/
-                           |
-                           v
-        +------------------+------------------+
-        |  Read frame from source (IO_Manager)|
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Run detector on frame             |
-        |  - bboxes, masks, scores, classes |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Crop & preprocess person regions  |
-        |  - masked crops, center, scale     |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  HMAR inference (GPU)              |
-        |  - SMPL params, 3D joints         |
-        |  - camera, pose emb, UV, appe emb |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Build Detection objects           |
-        |  - detection_data dict per person  |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Tracker.predict()                  |
-        |  - propagate existing tracks        |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Tracker.update(detections)        |
-        |  - cost matrix (appe/pose/loca/uv) |
-        |  - Hungarian matching              |
-        |  - update / create / delete tracks |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Temporal prediction (Pose Transf.)|
-        |  - build sequences from history    |
-        |  - predict next pose+camera        |
-        |  - store in track.prediction       |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Update final_visuals_dic[frame]   |
-        |  - per-track state snapshot        |
-        +------------------+------------------+
-                           |
-                           v
-        +------------------+------------------+
-        |  Visualize (optional)              |
-        |  - render meshes via renderer      |
-        |  - overlay IDs, boxes, masks       |
-        |  - append frame to output video    |
-        +------------------+------------------+
-                           |
-                           v
-               \--------------------------/
-                \   Next frame (loop)    /
-                 ------------------------ 
+```mermaid
+flowchart TD
+    START([START<br/>(run demo / script)]) --> LOAD[Load config & models<br/>- PHALP class<br/>- Detector<br/>- HMAR<br/>- Pose Transformer<br/>- Tracker<br/>- Visualizer]
 
-                           |
-                           v
-                +------------------------+
-                |   End of video         |
-                | - save tracklets .pkl  |
-                | - close video writer   |
-                +-----------+------------+
-                            |
-                            v
-                +------------------------+
-                |          END           |
-                +------------------------+
+    LOAD --> OPEN[Open video / frame source]
+
+    OPEN --> READ[Read frame from source<br/>(IO_Manager)]
+    READ --> DETECT[Run detector on frame<br/>- bboxes, masks, scores, classes]
+    DETECT --> CROP[Crop & preprocess person regions<br/>- masked crops, center, scale]
+    CROP --> HMARSTEP[HMAR inference (GPU)<br/>- SMPL params, 3D joints<br/>- camera, pose emb, UV, appe emb]
+    HMARSTEP --> BUILDDET[Build Detection objects<br/>- detection_data dict per person]
+
+    BUILDDET --> PREDICT[Tracker.predict()<br/>- propagate existing tracks]
+    PREDICT --> UPDATE[Tracker.update(detections)<br/>- cost matrix (appe/pose/loca/uv)<br/>- Hungarian matching<br/>- update / create / delete tracks]
+
+    UPDATE --> TEMP[Temporal prediction (Pose Transformer)<br/>- build sequences from history<br/>- predict next pose+camera<br/>- store in track.prediction]
+
+    TEMP --> SNAP[Update final_visuals_dic[frame]<br/>- per-track state snapshot]
+
+    SNAP --> VIS[Visualize (optional)<br/>- render meshes via renderer<br/>- overlay IDs, boxes, masks<br/>- append frame to output video]
+
+    VIS --> MORE{More frames?}
+    MORE -->|Yes| READ
+    MORE -->|No| ENDVID[End of video<br/>- save tracklets .pkl<br/>- close video writer]
+
+    ENDVID --> END([END])
 ```
 
 ## 3. Core Components: Deep Dives into Major Subsystems
