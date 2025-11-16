@@ -267,44 +267,34 @@ For each track:
    - `_initiate_track(detection, detection_id)`
 
 Tracker Update Sequence Diagram
-```text
-Participants:
-- PHALP
-- Tracker
-- NearestNeighborDistanceMetric
-- HungarianMatcher (linear_assignment)
-- Track objects
+```mermaid
+sequenceDiagram
+    participant PHALP
+    participant Tracker
+    participant Metric as NearestNeighborDistanceMetric
+    participant Hungarian as HungarianMatcher
+    participant TrackObj as Track objects
 
-PHALP                       Tracker              Metric                  Hungarian             Track instances
-  |                           |                   |                         |                       |
-  | Tracker.predict()         |                   |                         |                       |
-  |-------------------------->|                   |                         |                       |
-  |                           | for each Track:   |                         |                       |
-  |                           |   Track.predict() |                         |                       |
-  |                           | (advance state)   |                         |                       |
-  |                           |-----------------> |                         |                       |
-  |                           |<----------------- |                         |                       |
-  |                           |                   |                         |                       |
-  | Tracker.update(dets)      |                   |                         |                       |
-  |-------------------------->|                   |                         |                       |
-  |                           | build feature     |                         |                       |
-  |                           | matrices (tracks vs dets)                   |                       |
-  |                           |-------------------------> Metric            |                       |
-  |                           |  distances appe/pose/loca/uv                |                       |
-  |                           |<-------------------------                   |                       |
-  |                           | combine distances -> cost matrix            |                       |
-  |                           |-------------------------------> Hungarian   |                       |
-  |                           |   assignment indices                        |                       |
-  |                           |<-------------------------------             |                       |
-  |                           | apply assignment:                           |                       |
-  |                           |  - matched pairs -> Track.update(det) ------+---------------------> |
-  |                           |  - unmatched dets -> new Track() -----------+---------------------> |
-  |                           |  - unmatched tracks -> Track.mark_missed()--+---------------------> |
-  |                           | recompute metric.partial_fit(...)           |                       |
-  |                           |--------------------------------> Metric     |                       |
-  |                           |<--------------------------------            |                       |
-  |                           | return updated track list                   |                       |
-  |<--------------------------|                                             |                       |
+    PHALP ->> Tracker: Tracker.predict()
+    Tracker ->> TrackObj: Track.predict()\n(for each track)
+    TrackObj -->> Tracker: state advanced
+
+    PHALP ->> Tracker: Tracker.update(dets)
+
+    Tracker ->> Metric: build feature matrices\ntracks vs detections\ncompute distances (appe/pose/loca/uv)
+    Metric -->> Tracker: distance values
+
+    Tracker ->> Hungarian: cost matrix
+    Hungarian -->> Tracker: assignment indices
+
+    Tracker ->> TrackObj: Track.update(det)\n(for matched pairs)
+    Tracker ->> TrackObj: new Track()\n(for unmatched detections)
+    Tracker ->> TrackObj: Track.mark_missed()\n(for unmatched tracks)
+
+    Tracker ->> Metric: metric.partial_fit(...)\n(update feature space)
+    Metric -->> Tracker: updated metric
+
+    Tracker -->> PHALP: updated track list
 ```
 
 ### 3.7 Tracklet Storage – How Track Objects Store History & Predictions
