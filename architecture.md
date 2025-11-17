@@ -695,22 +695,6 @@ Typically you will:
 3. Install Detectron2 compatible with that PyTorch build.
 4. Install remaining Python dependencies from `requirements.txt` or `setup.py`.
 
-### 7.3 Running PHALP on a Video
-
-A typical command (exact syntax may vary slightly with config files) looks like:
-
-```bash
-python scripts/demo.py \
-  video.source=/path/to/input_video.mp4 \
-  video.output_dir=outputs/demo_run
-```
-This will:
-1. Load all models (detector, HMAR, pose transformer, tracker, visualizer).
-2. Process each frame of the video through the PHALP pipeline.
-3. Save:
-    - A rendered video (output_video.mp4).
-    - A results file (results.pkl) containing final_visuals_dic with all tracklets.
-
 ## 8. Key Abstractions & Extension Points
 
 ### 8.1 Conceptual Interfaces
